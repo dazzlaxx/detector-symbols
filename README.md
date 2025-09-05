@@ -13,6 +13,8 @@
 ## Установка
 
 1. Клонируйте репозиторий:
+
 `bash
 git clone <repository-url>
 cd detector_symbols
+`
