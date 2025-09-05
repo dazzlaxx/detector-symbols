@@ -1,0 +1,34 @@
+*.py text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.h text eol=lf
+*.c text eol=lf
+*.cpp text eol=lf
+
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.exe binary
+
+
+*.sh text eol=lf -textconv
+
+
+*.largefile compress -delta
+
+
+*.py whitespace=fix
+*.txt whitespace=fix
+*.md whitespace=fix
+*.h whitespace=fix
+*.c whitespace=fix
+*.cpp whitespace=fix
+
+
+*.py working-tree-encoding=UTF-8
+*.txt working-tree-encoding=UTF-8
+*.md working-tree-encoding=UTF-8

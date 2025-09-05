@@ -1,0 +1,6 @@
+# Requirements for encoding-validator
+# No external dependencies required for basic functionality
+
+# For development and testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
