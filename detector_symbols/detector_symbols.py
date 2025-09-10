@@ -11,68 +11,73 @@ def detect_incorrect_encoding(filepath):
     issues_found = []
     
     try:
-        with open(filepath, 'rb') as f:
-            content = f.read()
-        
-        try:
-            utf8_content = content.decode('utf-8')
-            if 'ï' in utf8_content or 'Â' in utf8_content or 'Ã' in utf8_content:
-                issues_found.append({
-                    'line': 0,
-                    'issue': 'Возможное двойное кодирование UTF-8 → CP1251 → UTF-8',
-                    'content': 'Обнаружены характерные символы двойного кодирования'
-                })
-                
-        except UnicodeDecodeError:
-            try:
-                cp1251_content = content.decode('cp1251')
-
-                problematic_chars = []
-                for i, char in enumerate(cp1251_content):
-                    if ord(char) > 127:  
-                        problematic_chars.append((i, char, ord(char)))
-                
-                if problematic_chars:
-                    issues_found.append({
-                        'line': 0,
-                        'issue': 'Обнаружены не-ASCII символы в CP1251',
-                        'content': f'Проблемные символы: {problematic_chars[:5]}'  
-                    })
-                    
-            except UnicodeDecodeError:
-                issues_found.append({
-                    'line': 0,
-                    'issue': 'Неизвестная кодировка файла',
-                    'content': 'Файл не может быть декодирован как UTF-8 или CP1251'
-                })
-        
+        # Читаем файл как бинарный
         with open(filepath, 'rb') as f:
             lines = f.readlines()
             
+        # Анализируем каждую строку
         for line_num, line_bytes in enumerate(lines, start=1):
-            try:
-                line_cp1251 = line_bytes.decode('cp1251')
+            if not line_bytes.strip():  # Пропускаем пустые строки
+                continue
                 
-                if any(c in line_cp1251 for c in ['ï', 'Â', 'Ã', '©', '®', '²', '³']):
-                    issues_found.append({
-                        'line': line_num,
-                        'issue': 'Возможное двойное кодирование в строке',
-                        'content': repr(line_cp1251[:100])  
-                    })
-                    
-            except UnicodeDecodeError:
+            # Пробуем декодировать строку разными кодировками
+            decoded_lines = {}
+            
+            for encoding in ['utf-8', 'cp1251', 'iso-8859-1', 'cp866']:
                 try:
-                    line_utf8 = line_bytes.decode('utf-8')
-                    issues_found.append({
-                        'line': line_num,
-                        'issue': 'Строка в UTF-8 в файле CP1251',
-                        'content': repr(line_utf8[:100])
-                    })
+                    decoded_text = line_bytes.decode(encoding)
+                    decoded_lines[encoding] = decoded_text
                 except UnicodeDecodeError:
+                    continue
+            
+            # Если не удалось декодировать ни одной кодировкой
+            if not decoded_lines:
+                issues_found.append({
+                    'line': line_num,
+                    'issue': 'Не удается декодировать строку',
+                    'content': f'Бинарные данные: {line_bytes[:50].hex()}'
+                })
+                continue
+            
+            # Проверяем каждую декодированную версию на ошибки
+            for encoding, line_text in decoded_lines.items():
+                # Ищем характерные признаки двойного кодирования
+                problematic_chars = []
+                
+                for i, char in enumerate(line_text):
+                    code = ord(char)
+                    # Символы, которые часто появляются при двойном кодировании
+                    if code == 0xEF:  # ï
+                        problematic_chars.append((i, 'ï', '0xEF'))
+                    elif code == 0xC2:  # Â
+                        problematic_chars.append((i, 'Â', '0xC2'))
+                    elif code == 0xC3:  # Ã
+                        problematic_chars.append((i, 'Ã', '0xC3'))
+                    elif code == 0xA9:  # ©
+                        problematic_chars.append((i, '©', '0xA9'))
+                    elif code == 0xAE:  # ®
+                        problematic_chars.append((i, '®', '0xAE'))
+                    elif code == 0xB2:  # ²
+                        problematic_chars.append((i, '²', '0xB2'))
+                    elif code == 0xB3:  # ³
+                        problematic_chars.append((i, '³', '0xB3'))
+                    elif code == 0xB0:  # °
+                        problematic_chars.append((i, '°', '0xB0'))
+                    elif code == 0xB1:  # ±
+                        problematic_chars.append((i, '±', '0xB1'))
+                    elif code == 0xB5:  # µ
+                        problematic_chars.append((i, 'µ', '0xB5'))
+                    # Любые другие не-ASCII символы в предположительно ASCII тексте
+                    elif code > 127 and not line_text.strip().startswith(('//', '/*', '*')):
+                        problematic_chars.append((i, char, f'0x{code:02X}'))
+                
+                if problematic_chars:
+                    # Берем только первые 5 проблемных символов для вывода
+                    short_list = problematic_chars[:5]
                     issues_found.append({
                         'line': line_num,
-                        'issue': 'Не удается декодировать строку',
-                        'content': repr(line_bytes[:50])  
+                        'issue': f'Проблемные символы в кодировке {encoding}',
+                        'content': f'Символы: {short_list} | Текст: {repr(line_text.strip()[:100])}'
                     })
                     
     except Exception as e:
@@ -84,51 +89,71 @@ def detect_incorrect_encoding(filepath):
     
     return issues_found
 
-def should_skip_file(filename):
-    if filename.endswith(('.py', '.pyc', '.pyo')):
-        return True
+def should_analyze_file(filepath):
+    """Определяет, нужно ли анализировать файл"""
+    filename = os.path.basename(filepath)
+    _, ext = os.path.splitext(filename.lower())
     
-    if filename.endswith(('.pyproj', '.sln', '.csproj', '.vbproj', '.vcxproj')):
-        return True
+    # Пропускаем Python файлы
+    if ext == '.py':
+        return False
     
-    if filename.endswith(('.suo', '.user', '.ide', '.vs', '.vscode')):
-        return True
+    # Пропускаем явно бинарные файлы
+    binary_extensions = [
+        '.exe', '.dll', '.so', '.bin', '.dat', '.pdb', '.obj', '.lib',
+        '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.jpg', '.jpeg', 
+        '.png', '.gif', '.bmp', '.mp3', '.mp4', '.avi', '.mkv', '.pdf',
+        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'
+    ]
     
-    if filename.endswith(('.exe', '.dll', '.so', '.bin', '.dat', '.pdb', '.obj', '.lib')):
-        return True
+    if ext in binary_extensions:
+        return False
     
-    if filename.endswith(('.zip', '.rar', '.7z', '.tar', '.gz', '.bz2')):
-        return True
+    # Пропускаем системные файлы
+    if filename in ['Thumbs.db', '.DS_Store', 'desktop.ini']:
+        return False
     
-    if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', '.avi', '.mkv')):
-        return True
+    # Пропускаем скрытые файлы
+    if filename.startswith('.'):
+        return False
     
-    if filename.startswith(('.', '__')):
-        return True
+    # Для файлов без расширения проверяем, текстовые ли они
+    if ext == '':
+        try:
+            with open(filepath, 'rb') as f:
+                sample = f.read(1024)
+                # Если в первых 1024 байтах есть нулевые байты - вероятно бинарный файл
+                if b'\x00' in sample:
+                    return False
+        except:
+            return False
     
-    if filename in ('package.json', 'package-lock.json', 'requirements.txt', 'Pipfile', 'Pipfile.lock'):
-        return True
-    
-    return False
+    # Анализируем все остальные файлы
+    return True
 
-def analyze_file(filepath, relative_to=None):
+def analyze_file(filepath, show_full_path=True):
     """Анализирует один файл и возвращает результаты"""
     global all_issues
     
-    if relative_to:
-        display_path = os.path.relpath(filepath, relative_to)
-    else:
-        display_path = os.path.basename(filepath)
+    # Всегда используем полный абсолютный путь
+    full_path = os.path.abspath(filepath)
+    display_path = full_path  # Всегда показываем полный путь
     
-    if should_skip_file(os.path.basename(filepath)):
+    # Проверяем, нужно ли анализировать этот файл
+    if not should_analyze_file(filepath):
         return False
+    
+    print(f"Анализируем: {display_path}")
     
     issues = detect_incorrect_encoding(filepath)
     
     if issues:
-        print(f"\n{'='*80}")
-        print(f"Файл: {display_path}")
-        print(f"{'='*80}")
+        print(f"  Найдено проблем: {len(issues)}")
+        
+        # ВЫВОДИМ РЕЗУЛЬТАТЫ СРАЗУ ЖЕ С ПОЛНЫМ ПУТЕМ К ФАЙЛУ
+        print(f"\n{'='*100}")
+        print(f"ФАЙЛ: {display_path}")
+        print(f"{'='*100}")
         
         for issue in issues:
             if issue['line'] > 0:
@@ -136,75 +161,95 @@ def analyze_file(filepath, relative_to=None):
                 print(f"Содержимое: {issue['content']}")
             else:
                 print(f"{issue['issue']}")
-                print(f"Детали: {issue['content']}")
-            
+                if issue['content']:
+                    print(f"Детали: {issue['content']}")
+            print("-" * 60)
+        
+        # Сохраняем все проблемы с полным путем
+        for issue in issues:
             all_issues.append({
-                'file': display_path,
+                'file': display_path,  # Сохраняем ПОЛНЫЙ абсолютный путь
                 'line': issue['line'],
                 'issue': issue['issue'],
                 'content': issue['content']
             })
         
         return True
-    return False
+    else:
+        print(f"  Проблем не найдено")
+        return False
 
 def analyze_directory(directory_path):
     """Рекурсивно анализирует все файлы в директории"""
     issues_count = 0
     directory_path = os.path.abspath(directory_path)
     
-    print(f"Анализ директории: {os.path.basename(directory_path)}")
-    print(f"Пропускаем: Python файлы, проекты, бинарные файлы, медиафайлы")
-    print(f"{'='*80}")
+    print(f"Анализ директории: {directory_path}")
+    print(f"Проверяем все файлы, кроме Python и бинарных")
+    print(f"{'='*100}")
+    
+    total_files = 0
+    analyzed_files = 0
     
     for root, dirs, files in os.walk(directory_path):
+        # Пропускаем скрытые директории
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        
         for file in files:
+            total_files += 1
             filepath = os.path.join(root, file)
+            
             try:
-                if analyze_file(filepath, directory_path):
+                # Всегда передаем полный путь и показываем полный путь
+                if analyze_file(filepath, show_full_path=True):
                     issues_count += 1
+                analyzed_files += 1
             except Exception as e:
                 print(f"Ошибка при анализе файла {filepath}: {e}")
     
+    print(f"\nПроанализировано файлов: {analyzed_files}")
     return issues_count
 
 def print_summary():
     """Выводит итоговый отчет со всеми найденными ошибками"""
     if not all_issues:
-        print("\n" + "="*80)
+        print("\n" + "="*100)
         print("ОШИБОК КОДИРОВКИ НЕ НАЙДЕНО!")
-        print("="*80)
+        print("="*100)
         return
     
-    print("\n" + "="*80)
+    print("\n" + "="*100)
     print("ИТОГОВЫЙ ОТЧЕТ ОБ ОШИБКАХ КОДИРОВКИ")
-    print("="*80)
+    print("="*100)
     
+    # Группируем по файлам
     files_with_issues = {}
     for issue in all_issues:
         if issue['file'] not in files_with_issues:
             files_with_issues[issue['file']] = []
         files_with_issues[issue['file']].append(issue)
     
+    # Выводим подробный отчет по каждому файлу
     for file_path, issues in files_with_issues.items():
         print(f"\nФАЙЛ: {file_path}")
-        print("-" * 60)
+        print("-" * 100)
+        
+        # Сортируем проблемы по строкам
+        issues.sort(key=lambda x: x['line'])
         
         for issue in issues:
             if issue['line'] > 0:
-                print(f"  Строка {issue['line']:4d}: {issue['issue']}")
-                if len(issue['content']) > 100:
-                    print(f"         Содержимое: {issue['content'][:100]}...")
-                else:
-                    print(f"         Содержимое: {issue['content']}")
+                print(f"Строка {issue['line']:4d}: {issue['issue']}")
+                print(f"    {issue['content']}")
             else:
-                print(f"  {issue['issue']}")
+                print(f"{issue['issue']}")
                 if issue['content']:
-                    print(f"         Детали: {issue['content']}")
+                    print(f"    {issue['content']}")
     
-    print("\n" + "="*80)
+    # Сводная статистика
+    print("\n" + "="*100)
     print("СВОДНАЯ СТАТИСТИКА:")
-    print("="*80)
+    print("="*100)
     print(f"Всего файлов с ошибками: {len(files_with_issues)}")
     print(f"Всего ошибок: {len(all_issues)}")
     
@@ -228,7 +273,6 @@ def main():
 Примеры использования:
   python detector_symbols.py umerror.h    # Анализ конкретного файла
   python detector_symbols.py .            # Анализ текущей директории
-  python detector_symbols.py              # Анализ текущей директории
         '''
     )
     
@@ -246,15 +290,12 @@ def main():
         sys.exit(1)
     
     if os.path.isfile(args.path):
-        print("Анализ файла...")
-        if not should_skip_file(os.path.basename(args.path)):
-            analyze_file(args.path)
-        else:
-            print(f"Файл {args.path} пропущен (не текстовый файл)")
+        print(f"Анализ файла: {os.path.abspath(args.path)}")
+        # Для одиночного файла показываем абсолютный путь
+        analyze_file(args.path, show_full_path=True)
     elif os.path.isdir(args.path):
         issues_count = analyze_directory(args.path)
-        print(f"\n{'='*80}")
-        print(f"Анализ завершен. Найдено файлов с проблемами: {issues_count}")
+        print(f"\nНайдено файлов с проблемами: {issues_count}")
     else:
         print("Ошибка: указанный путь не является файлом или директорией")
         sys.exit(1)
